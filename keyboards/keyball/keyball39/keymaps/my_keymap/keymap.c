@@ -221,16 +221,12 @@ static void ldt_tapping_term_save(void) {
 // LNG2/LNG1) with the layer never having moved. Release after hold was
 // engaged just returns to layer 0. See aml_tl_keys[]/aml_tl_state[] below.
 //
-// TL5_SPC/TL2_SPC/TL3_MINS/TL4_ENT: right-hand-adjacent thumb keys on layer 0.
-// Same standard-timing tap-hold as AML_TL above (the layer only
-// moves once the term elapses while still held), but these sit under real
-// typing (SPC/MINS/ENT are tapped constantly at speed) rather than AML_TL's
-// "layer-access only, never overlaps another key" use case, so they resolve
-// tap-vs-hold against a short dedicated window (TL_EAGER_TAPPING_TERM_MS,
-// ~150ms) instead of the global QS.tapping_term: short enough that an
-// ordinary fast tap almost always finishes inside it, while a deliberate
-// hold (meant to reach the layer) reads as clearly longer. See
-// tl_eager_keys[]/tl_eager_state[] below.
+// TL5_SPC/TL2_SPC/TL3_MINS/TL4_ENT: retired. The layer-0 thumb keys are now
+// standard LT(5, KC_SPC)/LT(2, KC_SPC)/LT(3, KC_MINS)/LT(4, KC_ENT) with only
+// the hold overridden in process_record_user. The enum entries (and the
+// matching vial.json customKeycodes) must stay so every keycode after them
+// (MY_AML_PRNT...) keeps its value — removing them would shift those values
+// and break Vial's labels and assignments already saved in EEPROM.
 enum my_keycodes {
     ESC_ML = QK_KB_16,
     ESC_ML_LNG2,
@@ -251,10 +247,10 @@ enum my_keycodes {
     AML_TL5,
     AML_TL2,
     AML_TL3,
-    TL5_SPC,
-    TL2_SPC,
-    TL3_MINS,
-    TL4_ENT,
+    TL5_SPC,   // unused (replaced by LT(5, KC_SPC)) — kept as a placeholder
+    TL2_SPC,   // unused (replaced by LT(2, KC_SPC))
+    TL3_MINS,  // unused (replaced by LT(3, KC_MINS))
+    TL4_ENT,   // unused (replaced by LT(4, KC_ENT))
     MY_AML_PRNT,
     MY_AML_UP,
     MY_AML_DOWN,
@@ -307,44 +303,8 @@ static int8_t aml_tl_index(uint16_t keycode) {
     return -1;
 }
 
-// ── Layer-0 thumb tap-hold keys (TL5_SPC/TL2_SPC/TL3_MINS/TL4_ENT) ─────────
-// Same standard-timing tap-hold mechanics as aml_tl_keys above, generalized
-// to (tap keycode, hold layer, dedicated tapping term) instead of hardcoding
-// the AML-exit/LNG behavior, since these replace plain typing keys rather
-// than an AML-only escape hatch.
-#define TL_EAGER_TAPPING_TERM_MS 150
-
-typedef struct {
-    uint16_t keycode;
-    uint8_t  hold_layer;
-    uint16_t tap_keycode;
-} tl_eager_key_t;
-
-static const tl_eager_key_t tl_eager_keys[] = {
-    {TL5_SPC,  5, KC_SPC},
-    {TL2_SPC,  2, KC_SPC},
-    {TL3_MINS, 3, KC_MINS},
-    {TL4_ENT,  4, KC_ENT},
-};
-#define TL_EAGER_COUNT (sizeof(tl_eager_keys) / sizeof(tl_eager_keys[0]))
-
-typedef struct {
-    uint16_t timer;
-    bool     down;
-    bool     hold_active;
-} tl_eager_state_t;
-
-static tl_eager_state_t tl_eager_state[TL_EAGER_COUNT];
-
-static int8_t tl_eager_index(uint16_t keycode) {
-    for (uint8_t i = 0; i < TL_EAGER_COUNT; i++) {
-        if (tl_eager_keys[i].keycode == keycode) return (int8_t)i;
-    }
-    return -1;
-}
-
 void matrix_scan_user(void) {
-    // Promote AML_TL*/TL*_* keys from "waiting" to "hold engaged" once their
+    // Promote AML_TL* keys from "waiting" to "hold engaged" once their
     // tapping term elapses while still held — see the struct/keymap comments
     // above for why the layer switch has to happen here rather than at press
     // time (that's what makes this match ordinary LT() timing).
@@ -353,13 +313,6 @@ void matrix_scan_user(void) {
             timer_elapsed(aml_tl_state[i].timer) >= ldt_tapping_term) {
             layer_move(aml_tl_keys[i].hold_layer);
             aml_tl_state[i].hold_active = true;
-        }
-    }
-    for (uint8_t i = 0; i < TL_EAGER_COUNT; i++) {
-        if (tl_eager_state[i].down && !tl_eager_state[i].hold_active &&
-            timer_elapsed(tl_eager_state[i].timer) >= TL_EAGER_TAPPING_TERM_MS) {
-            layer_move(tl_eager_keys[i].hold_layer);
-            tl_eager_state[i].hold_active = true;
         }
     }
 
@@ -846,31 +799,23 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
             }
             return false;
         }
-        case TL5_SPC:
-        case TL2_SPC:
-        case TL3_MINS:
-        case TL4_ENT: {
-            int8_t idx = tl_eager_index(keycode);
-            if (idx < 0) return false;
+        // Layer-0 thumb keys: standard LT(), so tap-vs-hold is decided by QMK
+        // core (Tapping Term / Permissive Hold / Chordal Hold / Flow Tap /
+        // Quick Tap Term from Vial's QMK Settings all apply). Taps fall through
+        // to the stock LT tap (return true). Only the resolved hold is
+        // overridden: layer_move() instead of layer_on/off, so the hold
+        // replaces AML (layer 1) too, and release always lands on layer 0.
+        case LT(5, KC_SPC):
+        case LT(2, KC_SPC):
+        case LT(3, KC_MINS):
+        case LT(4, KC_ENT):
+            if (record->tap.count) return true;
             if (record->event.pressed) {
-                tl_eager_state[idx].down        = true;
-                tl_eager_state[idx].hold_active = false;
-                tl_eager_state[idx].timer       = timer_read();
-                // Layer stays put for now — matrix_scan_user engages the hold
-                // once TL_EAGER_TAPPING_TERM_MS elapses while this is still held.
-            } else if (tl_eager_state[idx].down) {
-                if (tl_eager_state[idx].hold_active) {
-                    // hold was already engaged: just return to layer 0
-                    layer_move(0);
-                } else {
-                    // released before the term elapsed: resolved as a tap,
-                    // the layer never moved
-                    tap_code16(tl_eager_keys[idx].tap_keycode);
-                }
-                tl_eager_state[idx].down = false;
+                layer_move(QK_LAYER_TAP_GET_LAYER(keycode));
+            } else {
+                layer_move(0);
             }
             return false;
-        }
         case RGB_MOD:
             if (record->event.pressed) {
                 if (my_anim != MY_ANIM_OFF) {
@@ -947,7 +892,7 @@ const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
     KC_Q , KC_W , KC_E , KC_R , KC_T ,                            KC_Y , KC_U , KC_I , KC_O , KC_P ,
     LALT_T(KC_A) , LGUI_T(KC_S) , LCTL_T(KC_D) , LSFT_T(KC_F) , KC_G ,                            KC_H , RSFT_T(KC_J) , RCTL_T(KC_K) , RGUI_T(KC_L) , RALT_T(KC_SCLN) ,
     KC_Z , KC_X , KC_C , KC_V , KC_B ,                            KC_N , KC_M , KC_COMM , KC_DOT , KC_SLSH ,
-    KC_LCTL , KC_LALT , KC_LGUI , TL5_SPC , TL2_SPC , TL3_MINS ,      TL4_ENT , LCTL_T(KC_BSPC) , LSFT_T(KC_LNG2) , KC_RALT , KC_RGUI , KC_ESC
+    KC_LCTL , KC_LALT , KC_LGUI , LT(5, KC_SPC) , LT(2, KC_SPC) , LT(3, KC_MINS) ,      LT(4, KC_ENT) , LCTL_T(KC_BSPC) , LSFT_T(KC_LNG2) , KC_RALT , KC_RGUI , KC_ESC
   ),
 
   [1] = LAYOUT_universal(
@@ -994,6 +939,28 @@ const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
 
 };
 // clang-format on
+
+#ifdef CHORDAL_HOLD
+// Chordal Hold handedness, in the same LAYOUT_universal order as the keymaps above.
+// The auto-generated default (from keyboard.json, LAYOUT_dual_ball order) does not
+// match this board's matrix, so left/right must be given explicitly.
+// 'L' = left hand, 'R' = right hand, '*' = thumb keys (may chord with either hand).
+// '*' also exempts the thumb tap-hold keys themselves from Chordal Hold
+// (get_chordal_hold_default() returns true for a '*' tap-hold key), so
+// LT(5/2/3) + a same-hand (left) key can still resolve as hold. This has to
+// be done here: quantum/qmk_settings.c defines get_chordal_hold() non-weakly
+// (it is what reads Vial's Chordal Hold toggle), so the keymap cannot.
+// Position-based: LCTL_T(KC_BSPC) on the 4th '*' is exempt as well.
+// Whether Chordal Hold is active is still controlled at runtime by Vial QMK Settings.
+// clang-format off
+const char chordal_hold_layout[MATRIX_ROWS][MATRIX_COLS] PROGMEM = LAYOUT_universal(
+  'L', 'L', 'L', 'L', 'L',                 'R', 'R', 'R', 'R', 'R',
+  'L', 'L', 'L', 'L', 'L',                 'R', 'R', 'R', 'R', 'R',
+  'L', 'L', 'L', 'L', 'L',                 'R', 'R', 'R', 'R', 'R',
+  'L', 'L', 'L', '*', '*', '*',       '*', '*', 'R', 'R', 'R', 'R'
+);
+// clang-format on
+#endif
 
 // Override weak function from keyball.c to preserve division remainder across
 // report cycles. The original discards the remainder each cycle, causing a
